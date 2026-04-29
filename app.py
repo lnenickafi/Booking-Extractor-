@@ -3,24 +3,25 @@ import requests
 import pandas as pd
 import time
 
-st.set_page_config(page_title="Booking.com Review Downloader", layout="wide")
+st.set_page_config(page_title="Booking Review Downloader", page_icon="📥")
 
-st.title("🏨 Booking.com Review Extractor")
-st.markdown("Stáhněte si všechny recenze z libovolného hotelu do CSV.")
+st.title("🏨 Booking.com Review Downloader")
+st.markdown("Zadejte parametry níže a stáhněte si surová data recenzí v CSV.")
 
-# --- SIDEBAR: Vstupy od uživatele ---
+# --- Vstupy v postranním panelu ---
 with st.sidebar:
-    st.header("Konfigurace")
-    api_key = st.text_input("Vložte svůj RapidAPI Key", type="password")
-    hotel_id = st.text_input("Vložte ID hotelu (např. 318615)")
-    max_pages = st.number_input("Maximální počet stránek (1 str. = cca 25 recenzí)", min_value=1, max_value=100, value=20)
+    st.header("🔑 Přihlášení a ID")
+    api_key = st.text_input("RapidAPI Key", type="password")
+    hotel_id = st.text_input("Hotel ID (např. 318615)")
     
-    st.info("Tip: API klíč najdete na rapidapi.com u Booking.com API.")
+    st.header("⚙️ Rozsah")
+    max_pages = st.number_input("Kolik stránek stáhnout? (1 str. ≈ 25 recenzí)", min_value=1, max_value=200, value=10)
+    st.info("Ponecháním filtrů na 'Vše' získáte kompletní dataset.")
 
-# --- HLAVNÍ LOGIKA ---
-if st.button("🚀 Spustit stahování"):
+# --- Funkce pro stahování ---
+if st.button("🚀 Spustit stahování dat"):
     if not api_key or not hotel_id:
-        st.error("Prosím vyplňte API klíč i ID hotelu.")
+        st.error("Musíte zadat API klíč a ID hotelu.")
     else:
         url = "https://booking-com.p.rapidapi.com/v1/hotels/reviews"
         headers = {
@@ -30,68 +31,71 @@ if st.button("🚀 Spustit stahování"):
         
         all_reviews = []
         progress_bar = st.progress(0)
-        status_text = st.empty()
+        status_msg = st.empty()
         
         for page in range(int(max_pages)):
             params = {
-                "sort_type": "SORT_MOST_RELEVANT",
                 "hotel_id": hotel_id,
                 "locale": "en-gb",
-                "language_filter": "en-gb,de,fr,cs,es,it,ru", # Přidejte další dle potřeby, nebo 'all'
                 "page_number": str(page),
-                "customer_type": "solo_traveller,review_category_group_of_friends,couple,family_with_children,business_traveller" # Všichni
+                "sort_type": "SORT_MOST_RELEVANT",
+                # Vynechání language_filter a customer_type zajistí u tohoto API nejširší možný odběr
             }
             
-            status_text.text(f"Stahuji stránku {page + 1}...")
+            status_msg.info(f"Stahuji stránku {page + 1} z {max_pages}...")
             
             try:
-                response = requests.get(url, headers=headers, params=params)
+                response = requests.get(url, headers=headers, params=params, timeout=15)
                 
                 if response.status_code == 429:
-                    st.warning("🚨 Rate limit dosažen. Čekám 10 sekund...")
-                    time.sleep(10)
+                    st.warning("🚨 Rate limit (429). Čekám 15 sekund na uvolnění...")
+                    time.sleep(15)
+                    # Zkusíme stejnou stránku znovu
+                    page -= 1
                     continue
                 
                 if response.status_code != 200:
-                    st.error(f"Chyba API: {response.status_code}")
+                    st.error(f"API vrátilo chybu {response.status_code}. Končím stahování.")
                     break
                 
                 data = response.json()
-                results = data.get('result', [])
+                # U Booking API jsou data v klíči 'result'
+                batch = data.get('result', [])
                 
-                if not results:
-                    st.success("Dosáhli jsme konce všech dostupných recenzí.")
+                if not batch:
+                    st.success("Dosáhli jsme konce dostupných recenzí.")
                     break
                 
-                all_reviews.extend(results)
+                all_reviews.extend(batch)
                 
-                # Aktualizace UI
+                # Update UI
                 progress = (page + 1) / max_pages
                 progress_bar.progress(progress)
                 
-                # Pauza proti blokaci
-                time.sleep(1.5)
+                # Malá pauza, abychom nebyli moc agresivní
+                time.sleep(1.2)
                 
             except Exception as e:
-                st.error(f"Nastala chyba: {e}")
+                st.error(f"Nastala neočekávaná chyba: {e}")
                 break
         
         if all_reviews:
+            # Převod na DataFrame
             df = pd.json_normalize(all_reviews)
             
-            # Základní čištění
-            st.write(f"✅ Staženo celkem {len(df)} recenzí.")
+            st.write(f"### ✅ Hotovo! Staženo {len(df)} recenzí.")
             
-            # Zobrazení náhledu
-            st.dataframe(df.head(10))
+            # Zobrazení náhledu surových dat
+            st.dataframe(df.head(50))
             
-            # Export do CSV
-            csv = df.to_csv(index=False).encode('utf-8')
+            # Export do CSV s podporou Excelu (utf-8-sig)
+            csv = df.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
+            
             st.download_button(
-                label="📥 Stáhnout kompletní CSV",
+                label="📥 Stáhnout surová data (CSV)",
                 data=csv,
-                file_name=f"reviews_hotel_{hotel_id}.csv",
+                file_name=f"booking_reviews_{hotel_id}.csv",
                 mime="text/csv",
             )
         else:
-            st.warning("Nebyly nalezeny žádné recenze.")
+            st.warning("Nebyly nalezeny žádné recenze. Zkontrolujte ID hotelu.")
